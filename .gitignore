@@ -1,0 +1,35 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Datasets and model artifacts
+data/raw/
+data/processed/
+data/train/
+data/valid/
+data/test/
+models/
+adapters/
+checkpoints/
+outputs/
+runs/
+wandb/
+.cache/
+*.safetensors
+*.gguf
+*.mlx
+
+# macOS and editors
+.DS_Store
+.ipynb_checkpoints/
+.vscode/
+.idea/
