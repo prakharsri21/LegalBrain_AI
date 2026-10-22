@@ -33,3 +33,10 @@ wandb/
 .ipynb_checkpoints/
 .vscode/
 .idea/
+data/processed_safe/
+# Locally generated datasets
+data/processed_safe/
+data/processed_question_only/
+# Local datasets and generated model outputs
+data/
+outputs/

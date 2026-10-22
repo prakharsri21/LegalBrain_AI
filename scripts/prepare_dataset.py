@@ -14,13 +14,12 @@ from datasets import load_dataset
 DATASET_ID = "Prarabdha/indian-legal-supervised-fine-tuning-data"
 SHARD_COUNT = 33
 DEFAULT_SHARDS = "0,10,20"
-FIELDS = ("context", "question", "response")
 SHORT_ANSWER_LIMIT = 30
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Prepare a small, reproducible dataset for MLX-LM fine-tuning."
+        description="Prepare question-only legal QA data for MLX-LM."
     )
     parser.add_argument(
         "--shards",
@@ -31,30 +30,31 @@ def parse_args() -> argparse.Namespace:
         "--rows-per-shard",
         type=int,
         default=200,
-        help="Maximum sampled records from each shard (default: 200).",
+        help="Maximum sampled rows per shard.",
     )
     parser.add_argument(
         "--scan-multiplier",
         type=int,
         default=3,
-        help="Records scanned per shard relative to the requested sample.",
+        help="Maximum records scanned per requested sample row.",
     )
     parser.add_argument(
         "--seed",
         type=int,
         default=42,
-        help="Random seed for reproducibility.",
+        help="Random seed for reproducible sampling and splitting.",
     )
     parser.add_argument(
         "--output-dir",
-        default="data/processed",
-        help="Output directory (default: data/processed).",
+        default="data/processed_question_only",
+        help="Directory for the new question-only dataset.",
     )
 
     args = parser.parse_args()
 
     if args.rows_per_shard < 1:
         parser.error("--rows-per-shard must be greater than zero")
+
     if args.scan_multiplier < 1:
         parser.error("--scan-multiplier must be greater than zero")
 
@@ -65,29 +65,23 @@ def parse_args() -> argparse.Namespace:
             if part.strip()
         ]
     except ValueError:
-        parser.error("--shards must be comma-separated integers")
+        parser.error("--shards must contain comma-separated integers")
 
     if not args.shards:
         parser.error("Provide at least one shard index")
+
     if len(set(args.shards)) != len(args.shards):
         parser.error("--shards must not contain duplicate indices")
+
     if any(index < 0 or index >= SHARD_COUNT for index in args.shards):
         parser.error(f"Shard indices must be between 0 and {SHARD_COUNT - 1}")
 
     return args
 
 
-def normalize_whitespace(value: str) -> str:
-    """Normalize whitespace for comparisons without changing meaning."""
-    return re.sub(r"\s+", " ", value).strip()
-
-
-def normalize_context(value: str) -> str:
-    """Normalize spaces while preserving paragraph and line breaks."""
-    value = value.replace("\r\n", "\n").replace("\r", "\n")
-    value = re.sub(r"[ \t]+", " ", value)
-    value = re.sub(r"\n{3,}", "\n\n", value)
-    return value.strip()
+def normalize_text(text: str) -> str:
+    """Normalize whitespace for comparisons."""
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def sample_shard(
@@ -96,16 +90,11 @@ def sample_shard(
     scan_multiplier: int,
     seed: int,
 ) -> tuple[list[dict], int]:
-    """
-    Sample from a bounded window of one shard.
-
-    Reservoir sampling prevents keeping every scanned record in memory.
-    The result represents only the scanned window of this shard, not
-    the full dataset.
-    """
+    """Reservoir-sample from a bounded window of one remote shard."""
     shard_path = (
         f"data/train-{shard_index:05d}-of-{SHARD_COUNT:05d}.parquet"
     )
+
     scan_limit = rows_to_sample * scan_multiplier
     rng = random.Random(seed + shard_index)
     reservoir: list[dict] = []
@@ -142,8 +131,7 @@ def sample_shard(
 
     except Exception as exc:
         raise RuntimeError(
-            f"Failed to read shard {shard_index}. "
-            "Check network access and dataset availability.\n"
+            f"Failed to read shard {shard_index}: "
             f"{type(exc).__name__}: {exc}"
         ) from exc
 
@@ -163,36 +151,33 @@ def sample_shard(
 def clean_records(
     rows: list[dict],
 ) -> tuple[list[dict[str, str]], int, int]:
-    """
-    Remove examples with blank required fields and exact duplicate triples.
-
-    Short answers are retained and reported separately for manual review.
-    """
+    """Remove incomplete and exact-duplicate source examples."""
     cleaned: list[dict[str, str]] = []
     seen: set[tuple[str, str, str]] = set()
     blank_removed = 0
     duplicate_removed = 0
 
     for row in rows:
-        record = {
-            "context": normalize_context(
-                str(row.get("context") or "")
-            ),
-            "question": normalize_whitespace(
-                str(row.get("question") or "")
-            ),
-            "response": normalize_whitespace(
-                str(row.get("response") or "")
-            ),
-        }
+        context = normalize_text(str(row.get("context") or ""))
+        question = normalize_text(str(row.get("question") or ""))
+        response = normalize_text(str(row.get("response") or ""))
 
-        if not all(record[field] for field in FIELDS):
+        if not context or not question or not response:
             blank_removed += 1
             continue
 
-        # Deduplicate on all three fields after whitespace normalization.
-        duplicate_key = tuple(
-            record[field].casefold() for field in FIELDS
+        # Keep the source context internally for split grouping.
+        # It will not be placed in the training prompt.
+        record = {
+            "context": context,
+            "question": question,
+            "response": response,
+        }
+
+        duplicate_key = (
+            context.casefold(),
+            question.casefold(),
+            response.casefold(),
         )
 
         if duplicate_key in seen:
@@ -205,47 +190,21 @@ def clean_records(
     return cleaned, blank_removed, duplicate_removed
 
 
-def make_chat_example(record: dict[str, str]) -> dict:
-    """
-    Convert a legal QA triple to the messages format used by MLX-LM.
-
-    The user message supplies the source context and the question.
-    The assistant message contains the reference answer.
-    """
-    user_message = (
-        "Answer the legal question using only the supplied context. "
-        "If the context does not provide enough information, say so "
-        "rather than inventing facts.\n\n"
-        f"Legal context:\n{record['context']}\n\n"
-        f"Question:\n{record['question']}"
-    )
-
-    return {
-        "messages": [
-            {"role": "user", "content": user_message},
-            {"role": "assistant", "content": record["response"]},
-        ]
-    }
-
-
 def grouped_split(
     records: list[dict[str, str]],
     seed: int,
 ) -> dict[str, list[dict[str, str]]]:
     """
-    Split by normalized context to reduce leakage between splits.
+    Split related records together by normalized source context.
 
-    Examples sharing the same context stay in the same split. Ratios are
-    approximate because context groups may contain different numbers
-    of examples.
+    This reduces leakage between splits when multiple Q&A pairs came
+    from the same source passage. Split percentages are approximate.
     """
     groups: dict[str, list[dict[str, str]]] = defaultdict(list)
 
     for record in records:
-        context_key = normalize_whitespace(
-            record["context"]
-        ).casefold()
-        groups[context_key].append(record)
+        key = normalize_text(record["context"]).casefold()
+        groups[key].append(record)
 
     group_list = list(groups.values())
     random.Random(seed).shuffle(group_list)
@@ -263,7 +222,6 @@ def grouped_split(
         "test": [],
     }
 
-    # Put each entire context group into the split most below its target.
     for group in group_list:
         selected_split = max(
             splits,
@@ -271,19 +229,63 @@ def grouped_split(
         )
         splits[selected_split].extend(group)
 
-    return splits
+    # Prevent the same normalized question from appearing in different
+    # splits, even if different source contexts produced it.
+    question_owner: dict[str, str] = {}
+    clean_splits: dict[str, list[dict[str, str]]] = {
+        "train": [],
+        "valid": [],
+        "test": [],
+    }
+
+    # Train gets first priority; validation and test remain disjoint
+    # from questions already assigned to a split.
+    for split_name in ("train", "valid", "test"):
+        for record in splits[split_name]:
+            question_key = record["question"].casefold()
+            owner = question_owner.get(question_key)
+
+            if owner is None:
+                question_owner[question_key] = split_name
+                clean_splits[split_name].append(record)
+            else:
+                # Duplicate questions from another split are omitted
+                # to avoid direct question leakage.
+                continue
+
+    return clean_splits
+
+
+def make_chat_example(record: dict[str, str]) -> dict:
+    """
+    Produce question-only supervised fine-tuning data.
+
+    The legal context is deliberately excluded from the user prompt.
+    """
+    return {
+        "messages": [
+            {
+                "role": "user",
+                "content": record["question"],
+            },
+            {
+                "role": "assistant",
+                "content": record["response"],
+            },
+        ]
+    }
 
 
 def write_jsonl(path: Path, records: list[dict[str, str]]) -> None:
-    """Write one serialized chat example per line."""
     with path.open("w", encoding="utf-8") as file:
         for record in records:
-            json.dump(
-                make_chat_example(record),
-                file,
-                ensure_ascii=False,
+            file.write(
+                json.dumps(
+                    make_chat_example(record),
+                    ensure_ascii=False,
+                )
+                + "\n"
             )
-            file.write("\n")
 
 
 def main() -> None:
@@ -293,14 +295,13 @@ def main() -> None:
     print(f"Shards: {args.shards}")
     print(f"Rows requested per shard: {args.rows_per_shard}")
     print(f"Random seed: {args.seed}")
-    print(f"Output: {args.output_dir}")
-    print("\nStreaming enabled; the full corpus will not be downloaded.")
+    print(f"Output directory: {args.output_dir}")
+    print("Training format: question → answer (no context in prompts)")
+    print("Streaming enabled; the full dataset will not be downloaded.")
 
     sampled_rows: list[dict] = []
     scan_report: dict[str, dict[str, int]] = {}
 
-    # Read one shard at a time to avoid the cross-shard shuffle behavior
-    # that caused problems during our earlier audit.
     for shard_index in args.shards:
         rows, scanned = sample_shard(
             shard_index=shard_index,
@@ -308,6 +309,7 @@ def main() -> None:
             scan_multiplier=args.scan_multiplier,
             seed=args.seed,
         )
+
         sampled_rows.extend(rows)
         scan_report[str(shard_index)] = {
             "scanned": scanned,
@@ -317,16 +319,14 @@ def main() -> None:
     if not sampled_rows:
         raise SystemExit("No records were sampled.")
 
-    print(f"\nTotal records sampled: {len(sampled_rows)}")
-
     records, blank_removed, duplicate_removed = clean_records(
         sampled_rows
     )
 
     if len(records) < 10:
         raise SystemExit(
-            f"Only {len(records)} usable records remain. "
-            "Inspect the data before creating training splits."
+            f"Only {len(records)} valid records remain. "
+            "Review the dataset before proceeding."
         )
 
     short_records = [
@@ -336,22 +336,17 @@ def main() -> None:
     ]
 
     print("\n--- Cleaning summary ---")
-    print(f"Blank-field records removed: {blank_removed}")
-    print(f"Exact duplicate records removed: {duplicate_removed}")
-    print(f"Records retained: {len(records)}")
+    print(f"Records sampled: {len(sampled_rows)}")
+    print(f"Blank records removed: {blank_removed}")
+    print(f"Exact duplicate triples removed: {duplicate_removed}")
+    print(f"Valid records retained: {len(records)}")
     print(
-        f"Responses under {SHORT_ANSWER_LIMIT} characters: "
-        f"{len(short_records)}"
+        f"Responses shorter than {SHORT_ANSWER_LIMIT} characters: "
+        f"{len(short_records)} (retained for now)"
     )
-
-    if short_records:
-        print("\nShort-answer examples for manual review:")
-        for record in short_records[:5]:
-            print(f"- {record['response'][:180]}")
 
     splits = grouped_split(records, seed=args.seed)
 
-    # Shuffle examples within each split reproducibly.
     rng = random.Random(args.seed)
     for examples in splits.values():
         rng.shuffle(examples)
@@ -364,7 +359,6 @@ def main() -> None:
         write_jsonl(path, splits[split_name])
         print(f"{split_name}: {len(splits[split_name])} examples -> {path}")
 
-    # Save metadata, not the raw dataset, alongside the prepared files.
     manifest = {
         "dataset_id": DATASET_ID,
         "shards": args.shards,
@@ -374,34 +368,33 @@ def main() -> None:
         "scan_multiplier": args.scan_multiplier,
         "sampled_records": len(sampled_rows),
         "blank_records_removed": blank_removed,
-        "exact_duplicates_removed": duplicate_removed,
-        "retained_records": len(records),
+        "exact_duplicate_triples_removed": duplicate_removed,
+        "retained_source_records": len(records),
         "short_responses_retained": len(short_records),
-        "grouping_method": "normalized context",
+        "training_input_format": "question_only",
+        "source_context_used_for_grouped_splits": True,
+        "source_context_in_model_messages": False,
         "split_counts": {
             name: len(examples)
             for name, examples in splits.items()
         },
-        "split_ratios_target": {
-            "train": 0.80,
-            "valid": 0.10,
-            "test": 0.10,
-        },
         "limitations": [
-            "Samples come from bounded windows of selected shards.",
-            "The sample is not representative of the full corpus.",
-            "Short answers are flagged, not automatically removed.",
-            "Exact-duplicate removal does not detect paraphrases.",
-            "Split ratios are approximate due to context grouping.",
+            "Only bounded windows of selected shards were sampled.",
+            "The sample is not representative of the entire corpus.",
+            "Answers were originally paired with source contexts, "
+            "but those contexts are omitted from model prompts.",
+            "Short answers are retained and require quality review.",
+            "Split ratios are approximate.",
         ],
     }
 
-    manifest_path = output_dir / "summary.json"
-    with manifest_path.open("w", encoding="utf-8") as file:
+    with (output_dir / "summary.json").open(
+        "w",
+        encoding="utf-8",
+    ) as file:
         json.dump(manifest, file, indent=2, ensure_ascii=False)
 
-    print(f"\nSummary written to {manifest_path}")
-    print("Dataset preparation complete.")
+    print("\nDataset preparation complete.")
 
 
 if __name__ == "__main__":
