@@ -687,6 +687,15 @@ wheels = [
 ]
 
 [[package]]
+name = "langid"
+version = "1.1.6"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ea/4c/0fb7d900d3b0b9c8703be316fbddffecdab23c64e1b46c7a83561d78bd43/langid-1.1.6.tar.gz", hash = "sha256:044bcae1912dab85c33d8e98f2811b8f4ff1213e5e9a9e9510137b84da2cb293", size = 1925978, upload-time = "2016-04-05T22:34:15.786Z" }
+
+[[package]]
 name = "legalbrain-ai"
 version = "0.1.0"
 source = { virtual = "." }
@@ -694,7 +703,9 @@ dependencies = [
     { name = "fastapi" },
     { name = "gradio" },
     { name = "httpx" },
+    { name = "langid" },
     { name = "mlx-lm", extra = ["train"] },
+    { name = "pyarrow" },
     { name = "uvicorn" },
 ]
 
@@ -703,7 +714,9 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.161.0" },
     { name = "gradio", specifier = ">=6.30.0" },
     { name = "httpx", specifier = ">=0.28.1" },
+    { name = "langid", specifier = ">=1.1.6" },
     { name = "mlx-lm", extras = ["train"], specifier = ">=0.32.2" },
+    { name = "pyarrow", specifier = ">=26.0.0" },
     { name = "uvicorn", specifier = ">=0.54.0" },
 ]
 

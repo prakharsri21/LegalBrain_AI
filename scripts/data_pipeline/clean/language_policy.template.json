@@ -1,0 +1,11 @@
+{
+  "language_gate_approved": false,
+  "classifier": "langid",
+  "decision_mode": "label_based",
+  "validation_reference": null,
+  "approved_by": null,
+  "minimum_classifier_score_by_field": {
+    "question": null,
+    "response": null
+  }
+}

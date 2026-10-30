@@ -8,6 +8,8 @@ dependencies = [
     "fastapi>=0.161.0",
     "gradio>=6.30.0",
     "httpx>=0.28.1",
+    "langid>=1.1.6",
     "mlx-lm[train]>=0.32.2",
+    "pyarrow>=26.0.0",
     "uvicorn>=0.54.0",
 ]

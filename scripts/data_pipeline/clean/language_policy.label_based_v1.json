@@ -1,0 +1,11 @@
+{
+  "language_gate_approved": true,
+  "classifier": "langid",
+  "decision_mode": "label_based",
+  "validation_reference": "data/reports/language-validation-pilot-v1/language_classifier_evaluation_user_reviewed_v1_refined_v3.json",
+  "approved_by": "User-approved operational policy in attached Stage 3 task 95267340-ad51-4e2c-961b-624ef6a767dd",
+  "minimum_classifier_score_by_field": {
+    "question": null,
+    "response": null
+  }
+}
