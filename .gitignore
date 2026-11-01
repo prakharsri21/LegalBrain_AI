@@ -1,42 +1,34 @@
-# Python
+# Python environments and caches
 .venv/
 __pycache__/
 *.py[cod]
 .pytest_cache/
 .coverage
 htmlcov/
+.cache/
 
 # Secrets
 .env
 .env.*
 !.env.example
 
-# Datasets and model artifacts
-data/raw/
-data/processed/
-data/train/
-data/valid/
-data/test/
+# Local data, generated reports, models and training artifacts
+data/
+outputs/
 models/
 adapters/
 checkpoints/
-outputs/
 runs/
 wandb/
-.cache/
 *.safetensors
 *.gguf
 *.mlx
+*.sqlite
+*.sqlite3
+*.db
 
 # macOS and editors
 .DS_Store
 .ipynb_checkpoints/
 .vscode/
 .idea/
-data/processed_safe/
-# Locally generated datasets
-data/processed_safe/
-data/processed_question_only/
-# Local datasets and generated model outputs
-data/
-outputs/
